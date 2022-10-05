@@ -10,105 +10,119 @@
 
 template <typename T>
 struct Node {
-  // 这两个指针会造成什么问题？
-  // bug: 相邻的两个节点next和prev会出现小彭老师讲过的循环引用的情况
-  //     互相引用导致引用计数无法清零
-  //     从而造成内存泄漏的情况
-  // TODO: 这里需要更换为 Unique_ptr 和 普通指针
+  // 这两个指针会造成什么问题？请修复
+  // 对于双向链表，相邻项之间存在循环引用，引用计数无法归零释放空间。
+  // 对于双向链表，可以看作前一项“拥有”后一项。
+  // 而后一项保留前一项的Node*指针
   std::unique_ptr<Node> next;
-  Node *prev;
+  Node* prev;
   // 如果能改成 unique_ptr 就更好了!
 
-  // TODO: 改为模板的形式
   T value;
-  //构造的时候直接把值传入，避免赋值
-  Node(T const &val) : value(val), prev(nullptr) {}
-  //拷贝构造函数以及移动赋值函数
-  Node(const Node &) = default;
-  Node &operator=(Node &&) = default;
+
+  // 这个构造函数有什么可以改进的？:value直接根据val构造而不是默认构造后赋值。
+  Node(const T& val) : value(val), prev(nullptr) {}
+  Node(const Node&) = default;
+  Node& operator=(Node&&) = default;
+
+  // insert会导致无法使用unique_ptr，因为会破环上面假设的“前一项拥有后一项”的前提
+  /*
+            +--- O ---+
+      O ---x           x--- nextO
+            +--- O ---+
+
+      会变成上面这样, 双向链表中用不到该操作所以直接注掉了。
+  */
+  // void insert(int val) {
+  //     auto node = std::make_unique<Node>(val);
+  //     node->next = next;
+  //     node->prev = prev;
+  //     if (prev)
+  //         prev->next = node;
+  //     if (next)
+  //         next->prev = node;
+  // }
 
   void erase() {
-    //如果当下节点的下一个节点存在，我们应当让下一个节点的上一个节点变成
-    //当下节点的上一个节点
     if (next) next->prev = prev;
-    //当下节点的上一个节点的next节点改为当下节点的next节点，更改所有权move!
     if (prev) prev->next = std::move(next);
   }
 
   ~Node() {
-    printf("~Node()\n");  // 应输出多少次？为什么少了？
+    printf("~Node()\n");  // 应输出多少次？为什么少了？因为循环引用
   }
 };
 
 template <typename T>
 struct List {
-  //下面是自己定义的迭代器！
   class iterator {
    public:
     using iterator_category = std::bidirectional_iterator_tag;
-    using difference_type = ptrdiff_t;
+    using difference_type = std::ptrdiff_t;
     using value_type = Node<T>;
-    using pointer = value_type *;
-    using reference = value_type &;
+    using pointer = value_type*;    // or also value_type*
+    using reference = value_type&;  // or also value_type&
 
     iterator(pointer ptr) : m_ptr(ptr) {}
     reference operator*() { return *m_ptr; }
     pointer operator->() { return m_ptr; }
 
-    //前缀增量
-    iterator &operator++() {
+    // Prefix increment
+    iterator& operator++() {
       m_ptr = m_ptr->next.get();
       return *this;
     }
 
-    //后缀增量
+    // Postfix increment
     iterator operator++(int) {
       iterator tmp = *this;
       ++(*this);
       return tmp;
     }
-    friend bool operator==(const iterator &a, const iterator &b) {
+
+    friend bool operator==(const iterator& a, const iterator& b) {
       return a.m_ptr == b.m_ptr;
     };
-    friend bool operator!=(const iterator &a, const iterator &b) {
+    friend bool operator!=(const iterator& a, const iterator& b) {
       return a.m_ptr != b.m_ptr;
     };
 
    private:
-    Node<T> *m_ptr;
+    Node<T>* m_ptr;
   };
+
   std::unique_ptr<Node<T>> head;
-  Node<T> *back = nullptr;
+  Node<T>* back = nullptr;
+
   List() = default;
 
-  List(List const &other_) {
+  List(List& other) {
     printf("List 被拷贝！\n");
-    List &other = const_cast<List &>(other_);
-    printf("正在拷贝！");
-    // todo: 这里进行的是浅拷贝向深拷贝的转换！
     for (auto it = other.begin(); it != other.end(); it++) {
       push_back(it->value);
     }
     // 请实现拷贝构造函数为 **深拷贝**
   }
 
-  // FIXME: 因为我们可以用移动赋值来进行代替
-  List &operator=(List const &) = delete;  // 为什么删除拷贝赋值函数也不出错？
+  List& operator=(List const&) = delete;  // 为什么删除拷贝赋值函数也不出错？
+  // 此处拷贝赋值 = 拷贝构造出右值+移动赋值
 
-  List(List &&) = default;
-  List &operator=(List &&) = default;
+  List(List&&) = default;
+  List& operator=(List&&) = default;
 
-  Node<T> *front() const { return head.get(); }
+  Node<T>* front() const { return head.get(); }
 
   T pop_front() {
-    if (begin() == end()) throw std::out_of_range("pop_front()!");
+    if (begin() == end()) {
+      throw std::out_of_range("pop_front()");
+    }
     T ret = head->value;
     if (head.get() == back) back = nullptr;
     head = std::move(head->next);
     return ret;
   }
 
-  void push_front(const T &value) {
+  void push_front(const T& value) {
     auto node = std::make_unique<Node<T>>(value);
     if (head)
       head->prev = node.get();
@@ -117,7 +131,8 @@ struct List {
     node->next = std::move(head);
     head = std::move(node);
   }
-  void push_back(const T &value) {
+
+  void push_back(const T& value) {
     auto node = std::make_unique<Node<T>>(value);
     if (back) {
       node->prev = back;
@@ -129,7 +144,7 @@ struct List {
     }
   }
 
-  Node<T> *at(size_t index) const {
+  Node<T>* at(size_t index) const {
     auto curr = front();
     for (size_t i = 0; i < index; i++) {
       curr = curr->next.get();
@@ -139,14 +154,11 @@ struct List {
 
   iterator begin() { return iterator(head.get()); }
   iterator end() { return iterator(nullptr); }
-
-  iterator begin() const { return iterator(head.get()); }
-  iterator end() const { return iterator(nullptr); }
 };
 
-void print(List<int> const &lst) {  // 有什么值得改进的？
+void print(List<int>& lst) {  // 有什么值得改进的？: 传入const引用，避免拷贝
   printf("[");
-  for (auto &v : lst) {
+  for (auto& v : lst) {
     printf(" %d", v.value);
   }
   printf(" ]\n");
@@ -179,5 +191,9 @@ int main() {
   b = {};
   a = {};
 
+  b.push_back(1);
+  b.push_back(2);
+  b.push_back(3);
+  print(b);  // [ 1 2 3 ]
   return 0;
 }
